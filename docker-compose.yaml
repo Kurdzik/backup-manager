@@ -1,0 +1,170 @@
+networks:
+  app-network:
+
+volumes:
+  backups_volume:
+
+x-common-env: &common-env
+  RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+  RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+  RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+  RABBITMQ_PORT: ${RABBITMQ_PORT:-5555}
+  DATABASE_URL: ${DATABASE_URL}
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB}
+
+services:
+  migrations:
+    container_name: backup-manager-migrations
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.backend
+      args:
+        - PG_VERSION=17
+    user: "1000"
+    environment:
+      <<: *common-env
+    env_file:
+      - .env
+    networks:
+      - app-network
+    depends_on:
+      app_db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: ["sh", "-c", "uv run alembic upgrade head"]
+    restart: "no"
+
+  frontend:
+    container_name: backup-manager-frontend
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.frontend
+      args:
+        - NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
+    user: "1000"
+    ports:
+      - "3333:3000"
+    environment:
+      <<: *common-env
+    env_file:
+      - .env
+    networks:
+      - app-network
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  backend:
+    container_name: backup-manager-backend
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.backend
+      args:
+        - PG_VERSION=17
+        - QDRANT_CLIENT_VERSION=1.16.2
+        - ELASTIC_VERSION=9.2.1
+    user: "1000"
+    ports:
+      - "8080:8000"
+    environment:
+      <<: *common-env
+    env_file:
+      - .env
+    networks:
+      - app-network
+    volumes:
+      - backups_volume:/mnt/backups
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    command: ["sh", "-c", "uv run uvicorn src.services.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log"]
+
+  worker:
+    container_name: backup-manager-worker
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.backend
+      args:
+        - PG_VERSION=17
+        - QDRANT_CLIENT_VERSION=1.16.2
+        - ELASTIC_VERSION=9.2.1
+    user: "1000"
+    environment:
+      <<: *common-env
+    env_file:
+      - .env
+    networks:
+      - app-network
+    volumes:
+      - backups_volume:/mnt/backups
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    command: ["sh", "-c", "uv run celery -A src.services.worker worker --loglevel=info "] #--without-heartbeat --without-mingle --without-gossip
+
+  scheduler:
+    container_name: backup-manager-scheduler
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.backend
+      args:
+        - PG_VERSION=17
+        - QDRANT_CLIENT_VERSION=1.16.2
+        - ELASTIC_VERSION=9.2.1
+    environment:
+      <<: *common-env
+    env_file:
+      - .env
+    networks:
+      - app-network
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    command: ["sh", "-c", "uv run celery -A src.services.worker beat --loglevel=info"]
+
+  rabbitmq:
+    container_name: backup-manager-rabbitmq
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "5672:5672"     
+      - "15672:15672"    
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  app_db:
+    container_name: backup-manager-app-db
+    image: "postgres:17"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5678:5432"
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
