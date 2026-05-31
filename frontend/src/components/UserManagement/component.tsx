@@ -414,7 +414,7 @@ export function UserManagement() {
                 log_retention_period_d: retentionDays,
                 log_size: maxLogRows,
                 compression_enabled: compressionEnabled,
-                encryption_enabled: encryptionEnabled,
+                encryption_enabled: true,
                 gotify_enabled: gotifyEnabled,
                 gotify_url: gotifyUrl || null,
                 gotify_token: gotifyToken || null,
@@ -538,13 +538,15 @@ export function UserManagement() {
                                         onChange={(event) => setCompressionEnabled(event.currentTarget.checked)}
                                     />
 
-                                    <Group justify="space-between" align="flex-start">
-                                        <Switch
-                                            label="Encrypt backups"
-                                            description={encryptionKeyConfigured ? `Public key configured${keyFingerprint ? `: ${keyFingerprint.slice(0, 12)}...` : ""}` : "Generate a key before enabling encryption."}
-                                            checked={encryptionEnabled}
-                                            onChange={(event) => setEncryptionEnabled(event.currentTarget.checked)}
-                                        />
+                                    <Group justify="space-between" align="center">
+                                        <div style={{ fontSize: 14 }}>
+                                            <div style={{ fontWeight: 500 }}>Backup encryption</div>
+                                            <div style={{ color: "var(--mantine-color-dimmed)", fontSize: 12 }}>
+                                                {encryptionKeyConfigured
+                                                    ? `Public key configured${keyFingerprint ? `: ${keyFingerprint.slice(0, 12)}...` : ""}`
+                                                    : "Generate an encryption key to enable backup encryption."}
+                                            </div>
+                                        </div>
                                         <Button
                                             variant="light"
                                             onClick={handleGenerateEncryptionKey}
@@ -553,10 +555,6 @@ export function UserManagement() {
                                             Generate encryption key
                                         </Button>
                                     </Group>
-
-                                    <Alert color="yellow" title="Private key warning">
-                                        The private key is downloaded only during generation and is never stored on the server. You will need it to restore encrypted backups.
-                                    </Alert>
 
                                     <Divider />
 

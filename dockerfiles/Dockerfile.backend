@@ -21,14 +21,20 @@ RUN apt update && apt install -y --no-install-recommends \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# MongoDB Database Tools (mongodump / mongorestore)
-RUN curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | \
-    gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg
-RUN echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] \
-    https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" \
-    > /etc/apt/sources.list.d/mongodb-org-7.0.list
+# MongoDB Database Tools (mongodump / mongorestore) — install via tarball for multi-arch support
+# No debian12-aarch64 package exists; amazon2023-aarch64 is a static Go binary that works on any Linux arm64
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then \
+        MONGO_TOOLS_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-amazon2023-aarch64-100.17.0.tgz"; \
+    else \
+        MONGO_TOOLS_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-debian12-x86_64-100.17.0.tgz"; \
+    fi && \
+    curl -fsSL "$MONGO_TOOLS_URL" -o /tmp/mongodb-tools.tgz && \
+    tar -xzf /tmp/mongodb-tools.tgz -C /tmp && \
+    cp /tmp/mongodb-database-tools-*/bin/* /usr/local/bin/ && \
+    rm -rf /tmp/mongodb-tools.tgz /tmp/mongodb-database-tools-*
+
 RUN apt update && apt install -y --no-install-recommends \
-    mongodb-database-tools \
     default-mysql-client \
     && rm -rf /var/lib/apt/lists/*
 

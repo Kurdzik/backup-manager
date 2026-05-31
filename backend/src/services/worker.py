@@ -323,14 +323,13 @@ def create_backup(
                     local_paths.append(artifact_path)
                     _log_backup_stage("compression_completed", local_path=artifact_path)
 
-                if tenant_settings.encryption_enabled:
-                    encryption_key = _get_tenant_encryption_key(tenant_id)
-                    if not encryption_key:
-                        raise ValueError("Encryption is enabled but no public key is configured")
-                    _log_backup_stage("encryption_started", key_fingerprint=encryption_key.key_fingerprint)
-                    artifact_path = encrypt_file(artifact_path, encryption_key.public_key)
-                    local_paths.append(artifact_path)
-                    _log_backup_stage("encryption_completed", local_path=artifact_path)
+                encryption_key = _get_tenant_encryption_key(tenant_id)
+                if not encryption_key:
+                    raise ValueError("No encryption key configured. Generate an encryption key before running backups.")
+                _log_backup_stage("encryption_started", key_fingerprint=encryption_key.key_fingerprint)
+                artifact_path = encrypt_file(artifact_path, encryption_key.public_key)
+                local_paths.append(artifact_path)
+                _log_backup_stage("encryption_completed", local_path=artifact_path)
 
                 _log_backup_stage("upload_started", local_path=artifact_path)
                 remote_path = backup_destination_manager.upload_backup(artifact_path)
