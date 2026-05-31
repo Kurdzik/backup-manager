@@ -285,9 +285,9 @@ def create_backup(
                 _log_backup_stage("source_credentials_decryption_completed")
 
                 _log_backup_stage("source_manager_initialization_started")
-                backup_manager = BackupManager(source_credentials).create_from_type(
-                    backup_source.source_type
-                )
+                backup_manager = BackupManager(
+                    source_credentials, version=backup_source.version
+                ).create_from_type(backup_source.source_type)
                 _log_backup_stage("source_manager_initialization_completed")
 
                 _log_backup_stage("destination_credentials_decryption_started")
@@ -584,9 +584,9 @@ def restore_from_backup(self, request: RestoreBackupRequest, user_info: UserInfo
                 _log_restore_stage("source_credentials_decryption_completed")
 
                 _log_restore_stage("source_manager_initialization_started")
-                backup_manager = BackupManager(source_credentials).create_from_type(
-                    backup_source.source_type
-                )
+                backup_manager = BackupManager(
+                    source_credentials, version=backup_source.version
+                ).create_from_type(backup_source.source_type)
                 _log_restore_stage("source_manager_initialization_completed")
 
                 _log_restore_stage("destination_credentials_decryption_started")

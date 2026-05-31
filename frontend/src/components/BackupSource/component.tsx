@@ -37,6 +37,44 @@ const SOURCE_LABELS: Record<string, string> = {
 }
 const SOURCE_OPTIONS = SOURCE_TYPES.map((type) => ({ value: type, label: SOURCE_LABELS[type] }))
 
+const VERSION_OPTIONS: Record<string, { value: string; label: string }[]> = {
+    postgres: [
+        { value: "12", label: "PostgreSQL 12" },
+        { value: "13", label: "PostgreSQL 13" },
+        { value: "14", label: "PostgreSQL 14" },
+        { value: "15", label: "PostgreSQL 15" },
+        { value: "16", label: "PostgreSQL 16" },
+        { value: "17", label: "PostgreSQL 17" },
+    ],
+    elasticsearch: [
+        { value: "7.x", label: "Elasticsearch 7.x" },
+        { value: "8.x", label: "Elasticsearch 8.x" },
+        { value: "9.x", label: "Elasticsearch 9.x" },
+    ],
+    qdrant: [
+        { value: "1.7+", label: "Qdrant 1.7+" },
+        { value: "1.12+", label: "Qdrant 1.12+" },
+        { value: "1.16+", label: "Qdrant 1.16+" },
+    ],
+    mongodb: [
+        { value: "4.0", label: "MongoDB 4.0" },
+        { value: "5.0", label: "MongoDB 5.0" },
+        { value: "6.0", label: "MongoDB 6.0" },
+        { value: "7.0", label: "MongoDB 7.0" },
+        { value: "8.0", label: "MongoDB 8.0" },
+    ],
+    mysql: [
+        { value: "5.7", label: "MySQL 5.7" },
+        { value: "8.0", label: "MySQL 8.0" },
+        { value: "8.4", label: "MySQL 8.4" },
+        { value: "mariadb-10.x", label: "MariaDB 10.x" },
+        { value: "mariadb-11.x", label: "MariaDB 11.x" },
+    ],
+    neo4j: [{ value: "5.x", label: "Neo4j 5.x (5.13+)" }],
+    minio: [{ value: "any", label: "Any (S3-compatible)" }],
+    vault: [{ value: "1.x", label: "Vault 1.x" }],
+}
+
 interface Credentials {
     url: string
     login?: string | null  // Changed from 'username' to 'login' to match backend
@@ -52,6 +90,7 @@ interface BackupSource {
     login?: string | null
     password?: string | null
     api_key?: string | null
+    version?: string | null
     created_at: string
     updated_at: string
 }
@@ -515,6 +554,7 @@ export function BackupSourcesManager() {
     const [notification, setNotification] = useState<NotificationState | null>(null)
     const [editingId, setEditingId] = useState<number | null>(null)
     const [editingSource, setEditingSource] = useState<BackupSource | null>(null)
+    const [version, setVersion] = useState<string | null>(null)
 
     // Fetch backup sources
     const fetchSources = async () => {
@@ -595,6 +635,7 @@ export function BackupSourcesManager() {
             const payload = {
                 source_type: sourceType,
                 source_name: sourceName || undefined,
+                version: version || null,
                 credentials: {
                     url: credentials.url,
                     login: credentials.login || null,
@@ -620,6 +661,7 @@ export function BackupSourcesManager() {
 
             setModalOpened(false)
             setSourceName("")
+            setVersion(null)
             setCredentials({
                 url: "",
                 login: null,
@@ -629,7 +671,7 @@ export function BackupSourcesManager() {
             setSourceType("postgres")
             setEditingId(null)
             setEditingSource(null)
-            
+
             await fetchSources()
         } catch (err) {
             setNotification({ message: "Failed to add backup source", statusCode: 500 })
@@ -668,6 +710,7 @@ export function BackupSourcesManager() {
             const payload = {
                 source_id: sourceId,
                 source_name: sourceName || undefined,
+                version: version ?? undefined,
                 credentials: credentialsToSend
             }
 
@@ -691,6 +734,7 @@ export function BackupSourcesManager() {
             setEditingId(null)
             setEditingSource(null)
             setSourceName("")
+            setVersion(null)
             setCredentials({
                 url: "",
                 login: null,
@@ -760,6 +804,7 @@ export function BackupSourcesManager() {
         setEditingId(null)
         setEditingSource(null)
         setSourceName("")
+        setVersion(null)
         setCredentials({
             url: "",
             login: null,
@@ -775,6 +820,7 @@ export function BackupSourcesManager() {
         setEditingSource(source)
         setSourceName(source.name)
         setSourceType(source.source_type)
+        setVersion(source.version ?? null)
         // Reset credentials - they will be populated by the credential component's useEffect
         setCredentials({
             url: "",
@@ -1008,6 +1054,17 @@ export function BackupSourcesManager() {
                         placeholder="e.g., Production DB"
                         required
                     />
+
+                    {VERSION_OPTIONS[sourceType] && (
+                        <Select
+                            label="Server Version"
+                            placeholder="Select version"
+                            data={VERSION_OPTIONS[sourceType]}
+                            value={version}
+                            onChange={setVersion}
+                            clearable
+                        />
+                    )}
 
                     {getCredentialsComponent()}
 

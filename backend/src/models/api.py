@@ -65,12 +65,14 @@ class AddBackupSourceRequest(BaseModel):
         "neo4j",
     ]
     source_name: Optional[str] = None
+    version: Optional[str] = None
     credentials: Credentials
 
 
 class UpdateBackupSourceRequest(BaseModel):
     source_id: int
     source_name: Optional[str] = None
+    version: Optional[str] = None
     credentials: Optional[Credentials] = None
 
 

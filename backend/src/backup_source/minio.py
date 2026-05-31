@@ -20,8 +20,8 @@ class MinIOBackupManager(BaseBackupManager):
       password — Secret access key
     """
 
-    def __init__(self, credentials: Credentials) -> None:
-        super().__init__(credentials)
+    def __init__(self, credentials: Credentials, version=None) -> None:
+        super().__init__(credentials, version)
         self.client = self._initialize_client()
 
     def _initialize_client(self):

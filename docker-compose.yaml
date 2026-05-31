@@ -20,8 +20,6 @@ services:
     build:
       context: .
       dockerfile: dockerfiles/Dockerfile.backend
-      args:
-        - PG_VERSION=17
     user: "1000"
     environment:
       <<: *common-env
@@ -63,10 +61,6 @@ services:
     build:
       context: .
       dockerfile: dockerfiles/Dockerfile.backend
-      args:
-        - PG_VERSION=17
-        - QDRANT_CLIENT_VERSION=1.16.2
-        - ELASTIC_VERSION=9.2.1
     user: "1000"
     ports:
       - "8080:8000"
@@ -89,10 +83,6 @@ services:
     build:
       context: .
       dockerfile: dockerfiles/Dockerfile.backend
-      args:
-        - PG_VERSION=17
-        - QDRANT_CLIENT_VERSION=1.16.2
-        - ELASTIC_VERSION=9.2.1
     user: "1000"
     environment:
       <<: *common-env
@@ -113,10 +103,6 @@ services:
     build:
       context: .
       dockerfile: dockerfiles/Dockerfile.backend
-      args:
-        - PG_VERSION=17
-        - QDRANT_CLIENT_VERSION=1.16.2
-        - ELASTIC_VERSION=9.2.1
     environment:
       <<: *common-env
     env_file:

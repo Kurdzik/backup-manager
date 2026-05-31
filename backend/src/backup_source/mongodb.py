@@ -9,8 +9,8 @@ from src.base import BaseBackupManager, Credentials
 
 
 class MongoDBBackupManager(BaseBackupManager):
-    def __init__(self, credentials: Credentials) -> None:
-        super().__init__(credentials)
+    def __init__(self, credentials: Credentials, version=None) -> None:
+        super().__init__(credentials, version)
 
     def _build_uri(self) -> str:
         """Build a MongoDB URI from credentials.

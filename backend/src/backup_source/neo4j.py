@@ -19,8 +19,8 @@ logger = get_logger()
 
 
 class Neo4jBackupManager(BaseBackupManager):
-    def __init__(self, credentials: Credentials) -> None:
-        super().__init__(credentials)
+    def __init__(self, credentials: Credentials, version=None) -> None:
+        super().__init__(credentials, version)
         self.uri = self._normalize_uri(credentials.url)
         self.database = self._parse_database(credentials.url)
         self.driver = GraphDatabase.driver(self.uri, auth=self._get_auth())

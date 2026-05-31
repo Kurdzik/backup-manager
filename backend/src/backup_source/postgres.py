@@ -10,8 +10,8 @@ from src.base import BaseBackupManager, Credentials
 
 
 class PostgresBackupManager(BaseBackupManager):
-    def __init__(self, credentials: Credentials) -> None:
-        super().__init__(credentials)
+    def __init__(self, credentials: Credentials, version=None) -> None:
+        super().__init__(credentials, version)
         self.connection_params = self._parse_connection_params()
 
     def _parse_connection_params(self) -> dict:

@@ -44,6 +44,7 @@ class Source(SQLModel, table=True):
     login: Optional[str] = None
     password: Optional[str] = None
     api_key: Optional[str] = None
+    version: Optional[str] = None  # e.g. "7.x", "8.x", "17", "8.0"
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 

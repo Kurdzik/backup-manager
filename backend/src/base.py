@@ -7,8 +7,9 @@ from src.models import Credentials, BackupDetails
 
 
 class BaseBackupManager:
-    def __init__(self, credentials: Credentials) -> None:
+    def __init__(self, credentials: Credentials, version: Optional[str] = None) -> None:
         self.credentials = credentials
+        self.version = version
 
     def create_backup(
         self, tenant_id: str, backup_source_id: int, schedule_id: Optional[int] = None

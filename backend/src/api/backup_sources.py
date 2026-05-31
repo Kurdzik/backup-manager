@@ -51,6 +51,7 @@ def add_backup_source(
                 login=request.credentials.login,
                 password=encrypted_password,
                 api_key=encrypted_api_key,
+                version=request.version,
             )
 
             db_session.add(source)
@@ -210,6 +211,9 @@ def update_backup_source(
             if request.source_name is not None:
                 source.name = request.source_name
 
+            if request.version is not None:
+                source.version = request.version
+
             if request.credentials is not None:
                 if request.credentials.url is not None:
                     source.url = request.credentials.url
@@ -302,7 +306,8 @@ def test_connection_backup_source(
                     login=source.login,
                     password=decrypted_password,
                     api_key=decrypted_api_key,
-                )
+                ),
+                version=source.version,
             ).create_from_type(source.source_type)
 
             if backup_manager.test_connection():

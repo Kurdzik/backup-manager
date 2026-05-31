@@ -12,8 +12,8 @@ from src.base import BaseBackupManager, Credentials
 
 
 class VaultBackupManager(BaseBackupManager):
-    def __init__(self, credentials: Credentials) -> None:
-        super().__init__(credentials)
+    def __init__(self, credentials: Credentials, version=None) -> None:
+        super().__init__(credentials, version)
         self._mount_point = self._parse_mount_point()
         self.client = self._initialize_client()
 
