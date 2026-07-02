@@ -32,6 +32,9 @@ from src.models import (
 from src.crypto import decrypt_str
 import httpx
 
+# Default 4 hours; raise via BACKUP_TASK_TIMEOUT_SECONDS env var for very large databases.
+BACKUP_TASK_TIMEOUT = int(os.environ.get("BACKUP_TASK_TIMEOUT_SECONDS", 14400))
+
 app = Celery("worker")
 app.conf.update(
     broker_url=os.environ["CELERY_BROKER_URL"],
@@ -43,8 +46,8 @@ app.conf.update(
     result_serializer="json",
     # Task settings
     task_track_started=True,
-    task_time_limit=3600,
-    task_soft_time_limit=3540,
+    task_time_limit=BACKUP_TASK_TIMEOUT,
+    task_soft_time_limit=BACKUP_TASK_TIMEOUT - 60,
     worker_hijack_root_logger=False,
     # Scheduler conf
     beat_scheduler="src.services.scheduler:DynamicScheduler",
@@ -222,7 +225,7 @@ def _decrypt_credentials(
     )
 
 
-@app.task(bind=True, max_retries=BACKUP_MAX_RETRIES, soft_time_limit=3540, time_limit=3600)
+@app.task(bind=True, max_retries=BACKUP_MAX_RETRIES, soft_time_limit=BACKUP_TASK_TIMEOUT - 60, time_limit=BACKUP_TASK_TIMEOUT)
 def create_backup(
     self,
     backup_source_id: int,
@@ -323,13 +326,14 @@ def create_backup(
                     local_paths.append(artifact_path)
                     _log_backup_stage("compression_completed", local_path=artifact_path)
 
-                encryption_key = _get_tenant_encryption_key(tenant_id)
-                if not encryption_key:
-                    raise ValueError("No encryption key configured. Generate an encryption key before running backups.")
-                _log_backup_stage("encryption_started", key_fingerprint=encryption_key.key_fingerprint)
-                artifact_path = encrypt_file(artifact_path, encryption_key.public_key)
-                local_paths.append(artifact_path)
-                _log_backup_stage("encryption_completed", local_path=artifact_path)
+                if tenant_settings.encryption_enabled:
+                    encryption_key = _get_tenant_encryption_key(tenant_id)
+                    if not encryption_key:
+                        raise ValueError("No encryption key configured. Generate an encryption key before enabling backup encryption.")
+                    _log_backup_stage("encryption_started", key_fingerprint=encryption_key.key_fingerprint)
+                    artifact_path = encrypt_file(artifact_path, encryption_key.public_key)
+                    local_paths.append(artifact_path)
+                    _log_backup_stage("encryption_completed", local_path=artifact_path)
 
                 _log_backup_stage("upload_started", local_path=artifact_path)
                 remote_path = backup_destination_manager.upload_backup(artifact_path)
@@ -369,8 +373,9 @@ def create_backup(
                 return remote_path
 
         except SoftTimeLimitExceeded as e:
-            logger.error("backup_timeout", persist_db=True, exc_info=True)
-            _notify_gotify(tenant_id, "Backup failed", "Backup exceeded the 1 hour timeout")
+            timeout_hours = BACKUP_TASK_TIMEOUT / 3600
+            logger.error("backup_timeout", persist_db=True, timeout_seconds=BACKUP_TASK_TIMEOUT, exc_info=True)
+            _notify_gotify(tenant_id, "Backup failed", f"Backup exceeded the {timeout_hours:.1f}h timeout. For large databases (>4 GB) consider raising BACKUP_TASK_TIMEOUT_SECONDS.")
             raise e
         except Retry:
             raise

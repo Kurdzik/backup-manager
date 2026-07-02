@@ -366,6 +366,14 @@ export function UserManagement() {
         setKeyLoading(true)
         setNotification(null)
         try {
+            if (!window.crypto?.subtle) {
+                setNotification({
+                    message: "Encryption key generation requires a secure connection (HTTPS). The app is currently accessed over HTTP — please use HTTPS or access it via localhost.",
+                    statusCode: 400,
+                })
+                return
+            }
+
             const keyPair = await window.crypto.subtle.generateKey(
                 {
                     name: "RSA-OAEP",
@@ -414,7 +422,7 @@ export function UserManagement() {
                 log_retention_period_d: retentionDays,
                 log_size: maxLogRows,
                 compression_enabled: compressionEnabled,
-                encryption_enabled: true,
+                encryption_enabled: encryptionEnabled,
                 gotify_enabled: gotifyEnabled,
                 gotify_url: gotifyUrl || null,
                 gotify_token: gotifyToken || null,
