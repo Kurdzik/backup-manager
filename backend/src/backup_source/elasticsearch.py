@@ -25,6 +25,10 @@ class ElasticsearchBackupManager(BaseBackupManager):
     When version is None or not "7.x", PIT strategy is used (safe default for modern ES).
     """
 
+    _PRIVATE_INDEX_SETTINGS = frozenset(
+        {"creation_date", "uuid", "provided_name", "version", "routing", "history", "resize"}
+    )
+
     def __init__(self, credentials: Credentials, version=None) -> None:
         super().__init__(credentials, version)
         self._session = requests.Session()
@@ -56,6 +60,16 @@ class ElasticsearchBackupManager(BaseBackupManager):
         resp = self._session.get(f"{self._base_url}/{index}/_mapping", timeout=30)
         resp.raise_for_status()
         return resp.json()
+
+    def _sanitize_index_settings(self, settings_wrapper: dict, index_name: str) -> dict:
+        # Strip ES-private keys (creation_date, uuid, provided_name, version, ...) that
+        # come back from GET /_settings but are rejected by PUT /{index} on creation.
+        if not isinstance(settings_wrapper, dict):
+            return {}
+        raw = settings_wrapper.get(index_name, {}).get("settings", {}).get("index", {})
+        if not isinstance(raw, dict):
+            return {}
+        return {k: v for k, v in raw.items() if k not in self._PRIVATE_INDEX_SETTINGS}
 
     def _paginate_scroll(self, index: str) -> list[dict]:
         """ES 7.x: scroll-based pagination."""
@@ -191,74 +205,109 @@ class ElasticsearchBackupManager(BaseBackupManager):
 
         temp_dir = tempfile.mkdtemp()
         try:
-            with tarfile.open(backup_path, "r:gz") as tar:
-                tar.extractall(temp_dir)
+            try:
+                # "r:*" auto-detects compression: worker pre-decompresses gzip
+                # (services/worker.py:625) and hands us a plain tar, but direct
+                # callers may still pass a .tar.gz.
+                with tarfile.open(backup_path, "r:*") as tar:
+                    tar.extractall(temp_dir)
+            except (tarfile.ReadError, EOFError, OSError) as e:
+                raise RuntimeError(
+                    f"Elasticsearch backup archive is corrupted or truncated: "
+                    f"{backup_path} ({e})"
+                ) from e
 
             backup_dir = os.path.join(temp_dir, "elasticsearch_backup")
+
+            restored = 0
+            failed: list[tuple[str, str]] = []
 
             for json_file in os.listdir(backup_dir):
                 if not json_file.endswith(".json"):
                     continue
 
-                index_name = json_file.replace(".json", "")
+                index_name = json_file[: -len(".json")]
                 logger.info("elasticsearch_restoring_index", index=index_name)
 
-                with open(os.path.join(backup_dir, json_file)) as f:
-                    index_data = json.load(f)
+                try:
+                    with open(os.path.join(backup_dir, json_file)) as f:
+                        index_data = json.load(f)
 
-                # Delete existing index (ignore 404)
-                self._session.delete(f"{self._base_url}/{index_name}", timeout=15)
+                    # Delete existing index (ignore 404)
+                    self._session.delete(f"{self._base_url}/{index_name}", timeout=15)
 
-                settings_wrapper = index_data.get("settings", {})
-                mappings_wrapper = index_data.get("mappings", {})
-                index_settings = (
-                    settings_wrapper.get(index_name, {}).get("settings", {})
-                    if isinstance(settings_wrapper, dict)
-                    else {}
-                )
-                index_mappings = (
-                    mappings_wrapper.get(index_name, {}).get("mappings", {})
-                    if isinstance(mappings_wrapper, dict)
-                    else {}
-                )
+                    settings_wrapper = index_data.get("settings", {})
+                    mappings_wrapper = index_data.get("mappings", {})
+                    clean_index_settings = self._sanitize_index_settings(
+                        settings_wrapper, index_name
+                    )
+                    index_mappings = (
+                        mappings_wrapper.get(index_name, {}).get("mappings", {})
+                        if isinstance(mappings_wrapper, dict)
+                        else {}
+                    )
 
-                create_body: dict = {}
-                if index_settings:
-                    create_body["settings"] = index_settings
-                if index_mappings:
-                    create_body["mappings"] = index_mappings
+                    create_body: dict = {}
+                    if clean_index_settings:
+                        create_body["settings"] = {"index": clean_index_settings}
+                    if index_mappings:
+                        create_body["mappings"] = index_mappings
 
-                resp = self._session.put(
-                    f"{self._base_url}/{index_name}",
-                    json=create_body,
-                    timeout=15,
-                )
-                resp.raise_for_status()
+                    resp = self._session.put(
+                        f"{self._base_url}/{index_name}",
+                        json=create_body,
+                        timeout=15,
+                    )
+                    resp.raise_for_status()
 
-                documents = index_data.get("documents", [])
-                if documents:
-                    for i in range(0, len(documents), 1000):
-                        batch = documents[i : i + 1000]
-                        ndjson_lines = []
-                        for doc in batch:
-                            meta = {
-                                "index": {
-                                    "_index": index_name,
-                                    "_id": doc.get("_id"),
+                    documents = index_data.get("documents", [])
+                    if documents:
+                        for i in range(0, len(documents), 1000):
+                            batch = documents[i : i + 1000]
+                            ndjson_lines = []
+                            for doc in batch:
+                                meta = {
+                                    "index": {
+                                        "_index": index_name,
+                                        "_id": doc.get("_id"),
+                                    }
                                 }
-                            }
-                            ndjson_lines.append(json.dumps(meta))
-                            ndjson_lines.append(json.dumps(doc["_source"]))
-                        ndjson_body = "\n".join(ndjson_lines) + "\n"
-                        resp = self._session.post(
-                            f"{self._base_url}/_bulk",
-                            data=ndjson_body,
-                            headers={"Content-Type": "application/x-ndjson"},
-                            timeout=60,
-                        )
-                        resp.raise_for_status()
+                                ndjson_lines.append(json.dumps(meta))
+                                ndjson_lines.append(json.dumps(doc["_source"]))
+                            ndjson_body = "\n".join(ndjson_lines) + "\n"
+                            resp = self._session.post(
+                                f"{self._base_url}/_bulk",
+                                data=ndjson_body,
+                                headers={"Content-Type": "application/x-ndjson"},
+                                timeout=60,
+                            )
+                            resp.raise_for_status()
 
-                logger.info("elasticsearch_restore_index_completed", index=index_name)
+                    restored += 1
+                    logger.info("elasticsearch_restore_index_completed", index=index_name)
+                except Exception as e:
+                    failed.append((index_name, str(e)))
+                    logger.error(
+                        "elasticsearch_restore_index_failed",
+                        index=index_name,
+                        error=str(e),
+                        persist_db=True,
+                        exc_info=True,
+                    )
+
+            logger.info(
+                "elasticsearch_restore_summary",
+                restored=restored,
+                failed=len(failed),
+                failed_indices=[name for name, _ in failed],
+                persist_db=True,
+            )
+
+            if restored == 0 and failed:
+                raise RuntimeError(
+                    f"Elasticsearch restore failed for all {len(failed)} indices; "
+                    f"first error: {failed[0][1]}"
+                )
         finally:
             for root, dirs, files in os.walk(temp_dir, topdown=False):
                 for name in files:

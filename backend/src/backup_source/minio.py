@@ -80,7 +80,7 @@ class MinIOBackupManager(BaseBackupManager):
         temp_dir = tempfile.mkdtemp()
 
         try:
-            with tarfile.open(backup_path, "r:gz") as tar:
+            with tarfile.open(backup_path, "r:*") as tar:
                 tar.extractall(temp_dir)
 
             backup_root = os.path.join(temp_dir, "minio_backup")

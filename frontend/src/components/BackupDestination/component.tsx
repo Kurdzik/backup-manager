@@ -22,6 +22,14 @@ import {
 } from "@tabler/icons-react"
 import { DestinationIcon } from "@/components/BrandIcons"
 import { DisplayNotification } from "../Notifications/component"
+import { HostFields, ProtocolOption, buildHostUrl, parseHostUrl } from "@/components/HostFields/component"
+
+const HTTP_PROTOCOLS: ProtocolOption[] = [
+    { value: "http", label: "http://" },
+    { value: "https", label: "https://" },
+]
+const SMB_PROTOCOLS: ProtocolOption[] = [{ value: "smb", label: "smb://" }]
+const SFTP_PROTOCOLS: ProtocolOption[] = [{ value: "sftp", label: "sftp://" }]
 
 const DESTINATION_TYPES = ["s3", "smb", "sftp", "local_fs"]
 const DESTINATION_LABELS: Record<string, string> = {

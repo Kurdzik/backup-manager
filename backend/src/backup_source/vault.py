@@ -155,7 +155,7 @@ class VaultBackupManager(BaseBackupManager):
         temp_dir = tempfile.mkdtemp()
 
         try:
-            with tarfile.open(backup_path, "r:gz") as tar:
+            with tarfile.open(backup_path, "r:*") as tar:
                 tar.extractall(temp_dir)
 
             backup_file = os.path.join(temp_dir, "vault_backup", "vault_backup.json")

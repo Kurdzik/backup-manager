@@ -6,7 +6,6 @@ import {
     Stack,
     Modal,
     TextInput,
-    NumberInput,
     Button,
     Group,
     Table,
@@ -23,6 +22,27 @@ import {
 } from "@tabler/icons-react"
 import { ProductIcon } from "@/components/BrandIcons"
 import { DisplayNotification } from "../Notifications/component"
+import { HostFields, ProtocolOption, buildHostUrl, parseHostUrl } from "@/components/HostFields/component"
+
+const HTTP_PROTOCOLS: ProtocolOption[] = [
+    { value: "http", label: "http://" },
+    { value: "https", label: "https://" },
+]
+const POSTGRES_PROTOCOLS: ProtocolOption[] = [
+    { value: "postgres", label: "postgres://" },
+    { value: "postgresql", label: "postgresql://" },
+]
+const MYSQL_PROTOCOLS: ProtocolOption[] = [{ value: "mysql", label: "mysql://" }]
+const MONGODB_PROTOCOLS: ProtocolOption[] = [
+    { value: "mongodb", label: "mongodb://" },
+    { value: "mongodb+srv", label: "mongodb+srv://" },
+]
+const NEO4J_PROTOCOLS: ProtocolOption[] = [
+    { value: "bolt", label: "bolt://" },
+    { value: "neo4j", label: "neo4j://" },
+    { value: "bolt+s", label: "bolt+s://" },
+    { value: "neo4j+s", label: "neo4j+s://" },
+]
 
 const SOURCE_TYPES = ["postgres", "elasticsearch", "vault", "qdrant", "mysql", "mongodb", "minio", "neo4j"]
 const SOURCE_LABELS: Record<string, string> = {
@@ -106,355 +126,318 @@ interface CredentialComponentProps {
     initialValues: BackupSource | null
 }
 
-const splitHostPort = (url?: string) => {
-    if (!url) return { host: "", port: undefined }
-    const match = url.match(/([^:]+):(\d+)/)
-    return {
-        host: match?.[1] ?? "",
-        port: match?.[2] ? parseInt(match[2]) : undefined
-    }
-}
-
-
-
 function ExportPostgresCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [host, setHost] = useState("")
-    const [port, setPort] = useState<number | undefined>()
+    const [protocol, setProtocol] = useState("postgres")
+    const [host, setHost] = useState("localhost")
+    const [port, setPort] = useState<number | undefined>(5432)
     const [database, setDatabase] = useState("")
     const [username, setUsername] = useState("")
     const [password, setPassword] = useState("")
 
-    // Initialize from existing source
     useEffect(() => {
         if (!initialValues) {
-            setHost("")
-            setPort(undefined)
-            setDatabase("")
-            setUsername("")
-            setPassword("")
+            setProtocol("postgres"); setHost("localhost"); setPort(5432)
+            setDatabase(""); setUsername(""); setPassword("")
             return
         }
-
-        const match = initialValues.url?.match(/postgres:\/\/([^:]+):(\d+)\/(.+)/)
-        if (match) {
-            setHost(match[1])
-            setPort(parseInt(match[2]))
-            setDatabase(match[3])
-        }
-
+        const parsed = parseHostUrl(initialValues.url, ["postgres", "postgresql"], {
+            protocol: "postgres", host: "localhost", port: 5432,
+        })
+        setProtocol(parsed.protocol); setHost(parsed.host); setPort(parsed.port)
+        const dbMatch = initialValues.url?.match(/\/\/[^/]+\/([^?]+)/)
+        setDatabase(dbMatch?.[1] ?? "")
         setUsername(initialValues.login || "")
-        // Note: password won't be available when editing (it's encrypted on backend)
         setPassword("")
     }, [initialValues])
 
-    // Update parent whenever fields change
     useEffect(() => {
-        const credentials: Credentials = {
-            url:
-                host && port && database
-                    ? `postgres://${host}:${port}/${database}`
-                    : "",
+        const base = buildHostUrl(protocol, host, port)
+        onCredentialsChange({
+            url: base && database ? `${base}/${database}` : "",
             login: username || null,
             password: password || null,
-            apiKey: null
-        }
-        onCredentialsChange(credentials)
-    }, [host, port, database, username, password, onCredentialsChange])
+            apiKey: null,
+        })
+    }, [protocol, host, port, database, username, password, onCredentialsChange])
 
     return (
         <Stack>
-            <TextInput 
-                label="Host" 
-                value={host} 
-                onChange={(e) => setHost(e.currentTarget.value)}
-                required
+            <HostFields
+                protocols={POSTGRES_PROTOCOLS}
+                protocol={protocol}
+                host={host}
+                port={port}
+                onProtocolChange={setProtocol}
+                onHostChange={setHost}
+                onPortChange={setPort}
             />
-            <NumberInput 
-                label="Port" 
-                value={port} 
-                onChange={(v) => setPort(typeof v === "number" ? v : undefined)}
-                required
-            />
-            <TextInput 
-                label="Database" 
-                value={database} 
-                onChange={(e) => setDatabase(e.currentTarget.value)}
-                required
-            />
-            <TextInput 
-                label="Username" 
-                value={username} 
-                onChange={(e) => setUsername(e.currentTarget.value)}
-                required
-            />
-            <TextInput 
-                type="password" 
-                label="Password" 
-                value={password} 
+            <TextInput label="Database" value={database}
+                onChange={(e) => setDatabase(e.currentTarget.value)} required />
+            <TextInput label="Username" value={username}
+                onChange={(e) => setUsername(e.currentTarget.value)} required />
+            <TextInput type="password" label="Password" value={password}
                 onChange={(e) => setPassword(e.currentTarget.value)}
                 placeholder={initialValues ? "Leave blank to keep existing" : ""}
-                required={!initialValues}
-            />
+                required={!initialValues} />
         </Stack>
     )
 }
-
-
 
 function ExportQdrantCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [host, setHost] = useState("")
-    const [port, setPort] = useState<number | undefined>()
+    const [protocol, setProtocol] = useState("http")
+    const [host, setHost] = useState("localhost")
+    const [port, setPort] = useState<number | undefined>(6333)
     const [apiKey, setApiKey] = useState("")
 
     useEffect(() => {
         if (!initialValues) {
-            setHost("")
-            setPort(undefined)
-            setApiKey("")
+            setProtocol("http"); setHost("localhost"); setPort(6333); setApiKey("")
             return
         }
-        const { host, port } = splitHostPort(initialValues.url)
-        setHost(host)
-        setPort(port)
-        // Note: api_key won't be available when editing (it's encrypted on backend)
+        const parsed = parseHostUrl(initialValues.url, ["http", "https"], {
+            protocol: "http", host: "localhost", port: 6333,
+        })
+        setProtocol(parsed.protocol); setHost(parsed.host); setPort(parsed.port)
         setApiKey("")
-    }, [initialValues])
-
-    useEffect(() => {
-        const credentials: Credentials = {
-            url: host && port ? `${host}:${port}` : "",
-            login: null,
-            password: null,
-            apiKey: apiKey || null
-        }
-        onCredentialsChange(credentials)
-    }, [host, port, apiKey, onCredentialsChange])
-
-    return (
-        <Stack>
-            <TextInput 
-                label="Host" 
-                value={host} 
-                onChange={(e) => setHost(e.currentTarget.value)}
-                required
-            />
-            <NumberInput 
-                label="Port" 
-                value={port} 
-                onChange={(v) => setPort(typeof v === "number" ? v : undefined)}
-                required
-            />
-            <TextInput 
-                label="API Key (optional)" 
-                value={apiKey} 
-                onChange={(e) => setApiKey(e.currentTarget.value)}
-                placeholder={initialValues ? "Leave blank to keep existing" : ""}
-            />
-        </Stack>
-    )
-}
-
-
-
-function ExportElasticsearchCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [host, setHost] = useState("")
-    const [port, setPort] = useState<number | undefined>()
-    const [apiKey, setApiKey] = useState("")
-    const [username, setUsername] = useState("")
-    const [password, setPassword] = useState("")
-
-    useEffect(() => {
-        if (!initialValues) {
-            setHost("")
-            setPort(undefined)
-            setApiKey("")
-            setUsername("")
-            setPassword("")
-            return
-        }
-        const { host, port } = splitHostPort(initialValues.url)
-        setHost(host)
-        setPort(port)
-        // Note: encrypted fields won't be available when editing
-        setApiKey("")
-        setUsername(initialValues.login || "")
-        setPassword("")
-    }, [initialValues])
-
-    useEffect(() => {
-        const credentials: Credentials = {
-            url: host && port ? `${host}:${port}` : "",
-            login: username || null,
-            password: password || null,
-            apiKey: apiKey || null
-        }
-        onCredentialsChange(credentials)
-    }, [host, port, username, password, apiKey, onCredentialsChange])
-
-    return (
-        <Stack>
-            <TextInput 
-                label="Host" 
-                value={host} 
-                onChange={(e) => setHost(e.currentTarget.value)}
-                required
-            />
-            <NumberInput 
-                label="Port" 
-                value={port} 
-                onChange={(v) => setPort(typeof v === "number" ? v : undefined)}
-                required
-            />
-            <TextInput 
-                label="API Key" 
-                value={apiKey} 
-                onChange={(e) => setApiKey(e.currentTarget.value)}
-                placeholder={initialValues ? "Leave blank to keep existing" : ""}
-            />
-            <TextInput 
-                label="Username" 
-                value={username} 
-                onChange={(e) => setUsername(e.currentTarget.value)}
-            />
-            <TextInput 
-                type="password" 
-                label="Password" 
-                value={password} 
-                onChange={(e) => setPassword(e.currentTarget.value)}
-                placeholder={initialValues ? "Leave blank to keep existing" : ""}
-            />
-        </Stack>
-    )
-}
-
-
-
-function ExportVaultCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [host, setHost] = useState("")
-    const [port, setPort] = useState<number | undefined>()
-    const [apiKey, setApiKey] = useState("")
-
-    useEffect(() => {
-        if (!initialValues) {
-            setHost("")
-            setPort(undefined)
-            setApiKey("")
-            return
-        }
-        const { host, port } = splitHostPort(initialValues.url)
-        setHost(host)
-        setPort(port)
-        // Note: api_key won't be available when editing (it's encrypted on backend)
-        setApiKey("")
-    }, [initialValues])
-
-    useEffect(() => {
-        const credentials: Credentials = {
-            url: host && port ? `${host}:${port}` : "",
-            login: null,
-            password: null,
-            apiKey: apiKey || null
-        }
-        onCredentialsChange(credentials)
-    }, [host, port, apiKey, onCredentialsChange])
-
-    return (
-        <Stack>
-            <TextInput 
-                label="Host" 
-                value={host} 
-                onChange={(e) => setHost(e.currentTarget.value)}
-                required
-            />
-            <NumberInput 
-                label="Port" 
-                value={port} 
-                onChange={(v) => setPort(typeof v === "number" ? v : undefined)}
-                required
-            />
-            <TextInput 
-                label="API Key" 
-                value={apiKey} 
-                onChange={(e) => setApiKey(e.currentTarget.value)}
-                placeholder={initialValues ? "Leave blank to keep existing" : ""}
-                required={!initialValues}
-            />
-        </Stack>
-    )
-}
-
-
-
-function ExportMySQLCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [host, setHost] = useState("")
-    const [port, setPort] = useState<number | undefined>()
-    const [database, setDatabase] = useState("")
-    const [username, setUsername] = useState("")
-    const [password, setPassword] = useState("")
-
-    useEffect(() => {
-        if (!initialValues) {
-            setHost(""); setPort(undefined); setDatabase(""); setUsername(""); setPassword("")
-            return
-        }
-        const match = initialValues.url?.match(/mysql:\/\/([^:]+):(\d+)\/(.+)/)
-        if (match) { setHost(match[1]); setPort(parseInt(match[2])); setDatabase(match[3]) }
-        setUsername(initialValues.login || "")
-        setPassword("")
     }, [initialValues])
 
     useEffect(() => {
         onCredentialsChange({
-            url: host && port ? `mysql://${host}:${port}/${database}` : "",
-            login: username || null,
-            password: password || null,
-            apiKey: null
+            url: buildHostUrl(protocol, host, port),
+            login: null,
+            password: null,
+            apiKey: apiKey || null,
         })
-    }, [host, port, database, username, password, onCredentialsChange])
+    }, [protocol, host, port, apiKey, onCredentialsChange])
 
     return (
         <Stack>
-            <TextInput label="Host" value={host} onChange={(e) => setHost(e.currentTarget.value)} required />
-            <NumberInput label="Port" value={port ?? 3306} onChange={(v) => setPort(typeof v === "number" ? v : undefined)} required />
-            <TextInput label="Database" value={database} onChange={(e) => setDatabase(e.currentTarget.value)} />
-            <TextInput label="Username" value={username} onChange={(e) => setUsername(e.currentTarget.value)} required />
-            <TextInput type="password" label="Password" value={password} onChange={(e) => setPassword(e.currentTarget.value)} placeholder={initialValues ? "Leave blank to keep existing" : ""} required={!initialValues} />
+            <HostFields
+                protocols={HTTP_PROTOCOLS}
+                protocol={protocol}
+                host={host}
+                port={port}
+                onProtocolChange={setProtocol}
+                onHostChange={setHost}
+                onPortChange={setPort}
+            />
+            <TextInput label="API Key (optional)" value={apiKey}
+                onChange={(e) => setApiKey(e.currentTarget.value)}
+                placeholder={initialValues ? "Leave blank to keep existing" : ""} />
+        </Stack>
+    )
+}
+
+function ExportElasticsearchCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
+    const [protocol, setProtocol] = useState("http")
+    const [host, setHost] = useState("localhost")
+    const [port, setPort] = useState<number | undefined>(9200)
+    const [apiKey, setApiKey] = useState("")
+    const [username, setUsername] = useState("")
+    const [password, setPassword] = useState("")
+
+    useEffect(() => {
+        if (!initialValues) {
+            setProtocol("http"); setHost("localhost"); setPort(9200)
+            setApiKey(""); setUsername(""); setPassword("")
+            return
+        }
+        const parsed = parseHostUrl(initialValues.url, ["http", "https"], {
+            protocol: "http", host: "localhost", port: 9200,
+        })
+        setProtocol(parsed.protocol); setHost(parsed.host); setPort(parsed.port)
+        setApiKey(""); setUsername(initialValues.login || ""); setPassword("")
+    }, [initialValues])
+
+    useEffect(() => {
+        onCredentialsChange({
+            url: buildHostUrl(protocol, host, port),
+            login: username || null,
+            password: password || null,
+            apiKey: apiKey || null,
+        })
+    }, [protocol, host, port, username, password, apiKey, onCredentialsChange])
+
+    return (
+        <Stack>
+            <HostFields
+                protocols={HTTP_PROTOCOLS}
+                protocol={protocol}
+                host={host}
+                port={port}
+                onProtocolChange={setProtocol}
+                onHostChange={setHost}
+                onPortChange={setPort}
+            />
+            <TextInput label="API Key" value={apiKey}
+                onChange={(e) => setApiKey(e.currentTarget.value)}
+                placeholder={initialValues ? "Leave blank to keep existing" : ""} />
+            <TextInput label="Username" value={username}
+                onChange={(e) => setUsername(e.currentTarget.value)} />
+            <TextInput type="password" label="Password" value={password}
+                onChange={(e) => setPassword(e.currentTarget.value)}
+                placeholder={initialValues ? "Leave blank to keep existing" : ""} />
+        </Stack>
+    )
+}
+
+function ExportVaultCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
+    const [protocol, setProtocol] = useState("http")
+    const [host, setHost] = useState("localhost")
+    const [port, setPort] = useState<number | undefined>(8200)
+    const [apiKey, setApiKey] = useState("")
+
+    useEffect(() => {
+        if (!initialValues) {
+            setProtocol("http"); setHost("localhost"); setPort(8200); setApiKey("")
+            return
+        }
+        const parsed = parseHostUrl(initialValues.url, ["http", "https"], {
+            protocol: "http", host: "localhost", port: 8200,
+        })
+        setProtocol(parsed.protocol); setHost(parsed.host); setPort(parsed.port)
+        setApiKey("")
+    }, [initialValues])
+
+    useEffect(() => {
+        onCredentialsChange({
+            url: buildHostUrl(protocol, host, port),
+            login: null,
+            password: null,
+            apiKey: apiKey || null,
+        })
+    }, [protocol, host, port, apiKey, onCredentialsChange])
+
+    return (
+        <Stack>
+            <HostFields
+                protocols={HTTP_PROTOCOLS}
+                protocol={protocol}
+                host={host}
+                port={port}
+                onProtocolChange={setProtocol}
+                onHostChange={setHost}
+                onPortChange={setPort}
+            />
+            <TextInput label="API Key" value={apiKey}
+                onChange={(e) => setApiKey(e.currentTarget.value)}
+                placeholder={initialValues ? "Leave blank to keep existing" : ""}
+                required={!initialValues} />
+        </Stack>
+    )
+}
+
+function ExportMySQLCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
+    const [protocol, setProtocol] = useState("mysql")
+    const [host, setHost] = useState("localhost")
+    const [port, setPort] = useState<number | undefined>(3306)
+    const [database, setDatabase] = useState("")
+    const [username, setUsername] = useState("")
+    const [password, setPassword] = useState("")
+
+    useEffect(() => {
+        if (!initialValues) {
+            setProtocol("mysql"); setHost("localhost"); setPort(3306)
+            setDatabase(""); setUsername(""); setPassword("")
+            return
+        }
+        const parsed = parseHostUrl(initialValues.url, ["mysql"], {
+            protocol: "mysql", host: "localhost", port: 3306,
+        })
+        setProtocol(parsed.protocol); setHost(parsed.host); setPort(parsed.port)
+        const dbMatch = initialValues.url?.match(/\/\/[^/]+\/([^?]+)/)
+        setDatabase(dbMatch?.[1] ?? "")
+        setUsername(initialValues.login || "")
+        setPassword("")
+    }, [initialValues])
+
+    useEffect(() => {
+        const base = buildHostUrl(protocol, host, port)
+        onCredentialsChange({
+            url: base ? (database ? `${base}/${database}` : base) : "",
+            login: username || null,
+            password: password || null,
+            apiKey: null,
+        })
+    }, [protocol, host, port, database, username, password, onCredentialsChange])
+
+    return (
+        <Stack>
+            <HostFields
+                protocols={MYSQL_PROTOCOLS}
+                protocol={protocol}
+                host={host}
+                port={port}
+                onProtocolChange={setProtocol}
+                onHostChange={setHost}
+                onPortChange={setPort}
+            />
+            <TextInput label="Database" value={database}
+                onChange={(e) => setDatabase(e.currentTarget.value)} />
+            <TextInput label="Username" value={username}
+                onChange={(e) => setUsername(e.currentTarget.value)} required />
+            <TextInput type="password" label="Password" value={password}
+                onChange={(e) => setPassword(e.currentTarget.value)}
+                placeholder={initialValues ? "Leave blank to keep existing" : ""}
+                required={!initialValues} />
         </Stack>
     )
 }
 
 function ExportMongoDBCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [uri, setUri] = useState("")
+    const [protocol, setProtocol] = useState("mongodb")
+    const [host, setHost] = useState("localhost")
+    const [port, setPort] = useState<number | undefined>(27017)
     const [username, setUsername] = useState("")
     const [password, setPassword] = useState("")
 
     useEffect(() => {
-        if (!initialValues) { setUri(""); setUsername(""); setPassword(""); return }
-        setUri(initialValues.url || "")
+        if (!initialValues) {
+            setProtocol("mongodb"); setHost("localhost"); setPort(27017)
+            setUsername(""); setPassword("")
+            return
+        }
+        const parsed = parseHostUrl(initialValues.url, ["mongodb", "mongodb+srv"], {
+            protocol: "mongodb", host: "localhost", port: 27017,
+        })
+        setProtocol(parsed.protocol); setHost(parsed.host); setPort(parsed.port)
         setUsername(initialValues.login || "")
         setPassword("")
     }, [initialValues])
 
     useEffect(() => {
         onCredentialsChange({
-            url: uri,
+            url: buildHostUrl(protocol, host, port),
             login: username || null,
             password: password || null,
-            apiKey: null
+            apiKey: null,
         })
-    }, [uri, username, password, onCredentialsChange])
+    }, [protocol, host, port, username, password, onCredentialsChange])
 
     return (
         <Stack>
-            <TextInput label="Connection URI or host:port" value={uri} onChange={(e) => setUri(e.currentTarget.value)} placeholder="mongodb://host:27017 or host:27017" required />
-            <TextInput label="Username (optional)" value={username} onChange={(e) => setUsername(e.currentTarget.value)} placeholder={initialValues ? "Leave blank to keep existing" : ""} />
-            <TextInput type="password" label="Password (optional)" value={password} onChange={(e) => setPassword(e.currentTarget.value)} placeholder={initialValues ? "Leave blank to keep existing" : ""} />
+            <HostFields
+                protocols={MONGODB_PROTOCOLS}
+                protocol={protocol}
+                host={host}
+                port={port}
+                onProtocolChange={setProtocol}
+                onHostChange={setHost}
+                onPortChange={setPort}
+            />
+            <TextInput label="Username (optional)" value={username}
+                onChange={(e) => setUsername(e.currentTarget.value)}
+                placeholder={initialValues ? "Leave blank to keep existing" : ""} />
+            <TextInput type="password" label="Password (optional)" value={password}
+                onChange={(e) => setPassword(e.currentTarget.value)}
+                placeholder={initialValues ? "Leave blank to keep existing" : ""} />
         </Stack>
     )
 }
 
 function ExportNeo4jCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [host, setHost] = useState("")
+    const [protocol, setProtocol] = useState("bolt")
+    const [host, setHost] = useState("localhost")
     const [port, setPort] = useState<number | undefined>(7687)
     const [database, setDatabase] = useState("")
     const [username, setUsername] = useState("")
@@ -462,77 +445,102 @@ function ExportNeo4jCredentials({ onCredentialsChange, initialValues }: Credenti
 
     useEffect(() => {
         if (!initialValues) {
-            setHost("")
-            setPort(7687)
-            setDatabase("")
-            setUsername("")
-            setPassword("")
+            setProtocol("bolt"); setHost("localhost"); setPort(7687)
+            setDatabase(""); setUsername(""); setPassword("")
             return
         }
-
-        const match = initialValues.url?.match(/^(?:neo4j|bolt)(?:\+s|\+ssc)?:\/\/([^/:]+):(\d+)(?:\/(.+))?$/)
-        if (match) {
-            setHost(match[1])
-            setPort(parseInt(match[2]))
-            setDatabase(match[3] || "")
-        } else {
-            const { host, port } = splitHostPort(initialValues.url)
-            setHost(host)
-            setPort(port)
-            setDatabase("")
-        }
-
+        const parsed = parseHostUrl(
+            initialValues.url,
+            ["bolt", "neo4j", "bolt+s", "neo4j+s"],
+            { protocol: "bolt", host: "localhost", port: 7687 },
+        )
+        setProtocol(parsed.protocol); setHost(parsed.host); setPort(parsed.port)
+        const dbMatch = initialValues.url?.match(/\/\/[^/]+\/([^?]+)/)
+        setDatabase(dbMatch?.[1] ?? "")
         setUsername(initialValues.login || "")
         setPassword("")
     }, [initialValues])
 
     useEffect(() => {
-        const baseUrl = host && port ? `bolt://${host}:${port}` : ""
+        const base = buildHostUrl(protocol, host, port)
         onCredentialsChange({
-            url: baseUrl && database ? `${baseUrl}/${database}` : baseUrl,
+            url: base ? (database ? `${base}/${database}` : base) : "",
             login: username || null,
             password: password || null,
-            apiKey: null
+            apiKey: null,
         })
-    }, [host, port, database, username, password, onCredentialsChange])
+    }, [protocol, host, port, database, username, password, onCredentialsChange])
 
     return (
         <Stack>
-            <TextInput label="Host" value={host} onChange={(e) => setHost(e.currentTarget.value)} required />
-            <NumberInput label="Bolt Port" value={port} onChange={(v) => setPort(typeof v === "number" ? v : undefined)} required />
-            <TextInput label="Database (optional)" value={database} onChange={(e) => setDatabase(e.currentTarget.value)} placeholder="neo4j" />
-            <TextInput label="Username" value={username} onChange={(e) => setUsername(e.currentTarget.value)} required />
-            <TextInput type="password" label="Password" value={password} onChange={(e) => setPassword(e.currentTarget.value)} placeholder={initialValues ? "Leave blank to keep existing" : ""} required={!initialValues} />
+            <HostFields
+                protocols={NEO4J_PROTOCOLS}
+                protocol={protocol}
+                host={host}
+                port={port}
+                onProtocolChange={setProtocol}
+                onHostChange={setHost}
+                onPortChange={setPort}
+            />
+            <TextInput label="Database (optional)" value={database}
+                onChange={(e) => setDatabase(e.currentTarget.value)} placeholder="neo4j" />
+            <TextInput label="Username" value={username}
+                onChange={(e) => setUsername(e.currentTarget.value)} required />
+            <TextInput type="password" label="Password" value={password}
+                onChange={(e) => setPassword(e.currentTarget.value)}
+                placeholder={initialValues ? "Leave blank to keep existing" : ""}
+                required={!initialValues} />
         </Stack>
     )
 }
 
 function ExportMinIOCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [endpoint, setEndpoint] = useState("")
+    const [protocol, setProtocol] = useState("http")
+    const [host, setHost] = useState("localhost")
+    const [port, setPort] = useState<number | undefined>(9000)
     const [accessKey, setAccessKey] = useState("")
     const [secretKey, setSecretKey] = useState("")
 
     useEffect(() => {
-        if (!initialValues) { setEndpoint(""); setAccessKey(""); setSecretKey(""); return }
-        setEndpoint(initialValues.url || "")
+        if (!initialValues) {
+            setProtocol("http"); setHost("localhost"); setPort(9000)
+            setAccessKey(""); setSecretKey("")
+            return
+        }
+        const parsed = parseHostUrl(initialValues.url, ["http", "https"], {
+            protocol: "http", host: "localhost", port: 9000,
+        })
+        setProtocol(parsed.protocol); setHost(parsed.host); setPort(parsed.port)
         setAccessKey(initialValues.login || "")
         setSecretKey("")
     }, [initialValues])
 
     useEffect(() => {
         onCredentialsChange({
-            url: endpoint,
+            url: buildHostUrl(protocol, host, port),
             login: accessKey || null,
             password: secretKey || null,
-            apiKey: null
+            apiKey: null,
         })
-    }, [endpoint, accessKey, secretKey, onCredentialsChange])
+    }, [protocol, host, port, accessKey, secretKey, onCredentialsChange])
 
     return (
         <Stack>
-            <TextInput label="Endpoint URL" value={endpoint} onChange={(e) => setEndpoint(e.currentTarget.value)} placeholder="http://minio.example.com:9000" required />
-            <TextInput label="Access Key" value={accessKey} onChange={(e) => setAccessKey(e.currentTarget.value)} required />
-            <TextInput type="password" label="Secret Key" value={secretKey} onChange={(e) => setSecretKey(e.currentTarget.value)} placeholder={initialValues ? "Leave blank to keep existing" : ""} required={!initialValues} />
+            <HostFields
+                protocols={HTTP_PROTOCOLS}
+                protocol={protocol}
+                host={host}
+                port={port}
+                onProtocolChange={setProtocol}
+                onHostChange={setHost}
+                onPortChange={setPort}
+            />
+            <TextInput label="Access Key" value={accessKey}
+                onChange={(e) => setAccessKey(e.currentTarget.value)} required />
+            <TextInput type="password" label="Secret Key" value={secretKey}
+                onChange={(e) => setSecretKey(e.currentTarget.value)}
+                placeholder={initialValues ? "Leave blank to keep existing" : ""}
+                required={!initialValues} />
         </Stack>
     )
 }
