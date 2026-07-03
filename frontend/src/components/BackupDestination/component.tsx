@@ -72,7 +72,9 @@ interface CredentialComponentProps {
 
 
 function DestinationS3Credentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [endpointUrl, setEndpointUrl] = useState<string>("")
+    const [endpointProtocol, setEndpointProtocol] = useState<string>("https")
+    const [endpointHost, setEndpointHost] = useState<string>("")
+    const [endpointPort, setEndpointPort] = useState<number | undefined>(undefined)
     const [bucketName, setBucketName] = useState<string>("")
     const [prefix, setPrefix] = useState<string>("")
     const [login, setLogin] = useState<string>("")
@@ -80,11 +82,8 @@ function DestinationS3Credentials({ onCredentialsChange, initialValues }: Creden
 
     useEffect(() => {
         if (!initialValues) {
-            setEndpointUrl("")
-            setBucketName("")
-            setPrefix("")
-            setLogin("")
-            setPassword("")
+            setEndpointProtocol("https"); setEndpointHost(""); setEndpointPort(undefined)
+            setBucketName(""); setPrefix(""); setLogin(""); setPassword("")
             return
         }
 
@@ -94,58 +93,69 @@ function DestinationS3Credentials({ onCredentialsChange, initialValues }: Creden
             setBucketName(match[1])
             setPrefix(match[2] || "")
         }
-        
+
+        // The custom endpoint URL is stored in api_key on the backend.
+        const parsed = parseHostUrl(initialValues.api_key, ["http", "https"], {
+            protocol: "https", host: "", port: undefined,
+        })
+        setEndpointProtocol(parsed.protocol)
+        setEndpointHost(parsed.host)
+        setEndpointPort(parsed.port)
+
         setLogin(initialValues.login || "")
         setPassword("")
-        setEndpointUrl("") 
     }, [initialValues])
 
     useEffect(() => {
         const path = prefix ? `/${prefix}` : ""
+        const endpoint = endpointHost ? buildHostUrl(endpointProtocol, endpointHost, endpointPort) : ""
         const credentials: Credentials = {
             url: bucketName ? `s3://${bucketName}${path}` : "",
             login: login || null,
             password: password || null,
-            api_key: endpointUrl || null 
+            api_key: endpoint || null,
         }
         onCredentialsChange(credentials)
-    }, [bucketName, prefix, endpointUrl, login, password, onCredentialsChange])
+    }, [bucketName, prefix, endpointProtocol, endpointHost, endpointPort, login, password, onCredentialsChange])
 
     return (
         <Stack>
-            <TextInput 
-                label="Endpoint URL" 
-                value={endpointUrl} 
-                onChange={(e) => setEndpointUrl(e.currentTarget.value)} 
-                placeholder="https://s3.eu-central-1.amazonaws.com"
-                description="Optional: Custom endpoint for MinIO, R2, etc. Leave blank for default AWS S3."
-                required={!initialValues}
+            <HostFields
+                protocols={HTTP_PROTOCOLS}
+                protocol={endpointProtocol}
+                host={endpointHost}
+                port={endpointPort}
+                onProtocolChange={setEndpointProtocol}
+                onHostChange={setEndpointHost}
+                onPortChange={setEndpointPort}
+                hostPlaceholder="s3.eu-central-1.amazonaws.com"
+                portRequired={false}
             />
-            <TextInput 
-                label="Bucket Name" 
-                value={bucketName} 
-                onChange={(e) => setBucketName(e.currentTarget.value)} 
+            <TextInput
+                label="Bucket Name"
+                value={bucketName}
+                onChange={(e) => setBucketName(e.currentTarget.value)}
                 placeholder="my-production-backups"
                 required
             />
-            <TextInput 
-                label="Folder Prefix (Optional)" 
-                value={prefix} 
-                onChange={(e) => setPrefix(e.currentTarget.value)} 
+            <TextInput
+                label="Folder Prefix (Optional)"
+                value={prefix}
+                onChange={(e) => setPrefix(e.currentTarget.value)}
                 placeholder="postgres/daily"
                 description="Store backups in a specific subfolder."
             />
-            <TextInput 
-                label="Access Key ID" 
-                value={login} 
+            <TextInput
+                label="Access Key ID"
+                value={login}
                 onChange={(e) => setLogin(e.currentTarget.value)}
                 placeholder="AKIAIOSFODNN7EXAMPLE"
                 required
             />
-            <TextInput 
-                label="Secret Access Key" 
-                type="password" 
-                value={password} 
+            <TextInput
+                label="Secret Access Key"
+                type="password"
+                value={password}
                 onChange={(e) => setPassword(e.currentTarget.value)}
                 placeholder={initialValues ? "Leave blank to keep existing" : "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}
                 required={!initialValues}
@@ -156,54 +166,76 @@ function DestinationS3Credentials({ onCredentialsChange, initialValues }: Creden
 
 
 function DestinationSmbCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [url, setUrl] = useState<string>("")
+    const [protocol, setProtocol] = useState<string>("smb")
+    const [host, setHost] = useState<string>("localhost")
+    const [port, setPort] = useState<number | undefined>(undefined)
+    const [sharePath, setSharePath] = useState<string>("")
     const [login, setLogin] = useState<string>("")
     const [password, setPassword] = useState<string>("")
 
     useEffect(() => {
         if (!initialValues) {
-            setUrl("")
-            setLogin("")
-            setPassword("")
+            setProtocol("smb"); setHost("localhost"); setPort(undefined)
+            setSharePath(""); setLogin(""); setPassword("")
             return
         }
-
-        setUrl(initialValues.url || "")
+        const parsed = parseHostUrl(initialValues.url, ["smb"], {
+            protocol: "smb", host: "localhost", port: undefined,
+        })
+        setProtocol(parsed.protocol); setHost(parsed.host); setPort(parsed.port)
+        // Everything after "//host[:port]" or "smb://host[:port]" is the share path.
+        const stripped = initialValues.url
+            ?.replace(/^smb:\/\//, "")
+            .replace(/^\/\//, "")
+            .replace(/^[^/]+\//, "") ?? ""
+        setSharePath(stripped)
         setLogin(initialValues.login || "")
         setPassword(initialValues.password || "")
     }, [initialValues])
 
     useEffect(() => {
+        const base = buildHostUrl(protocol, host, port)
         const credentials: Credentials = {
-            url: url || "",
+            url: base && sharePath ? `${base}/${sharePath.replace(/^\/+/, "")}` : "",
             login: login || null,
             password: password || null,
-            api_key: null
+            api_key: null,
         }
         onCredentialsChange(credentials)
-    }, [url, login, password, onCredentialsChange])
+    }, [protocol, host, port, sharePath, login, password, onCredentialsChange])
 
     return (
         <Stack>
-            <TextInput 
-                label="SMB Share Path" 
-                value={url} 
-                onChange={(e) => setUrl(e.currentTarget.value)} 
-                placeholder="//192.168.1.100/backups/db"
-                description="Format: //server/share/path or smb://server/share/path"
+            <HostFields
+                protocols={SMB_PROTOCOLS}
+                protocol={protocol}
+                host={host}
+                port={port}
+                onProtocolChange={setProtocol}
+                onHostChange={setHost}
+                onPortChange={setPort}
+                hostPlaceholder="192.168.1.100"
+                portRequired={false}
+            />
+            <TextInput
+                label="Share / Path"
+                value={sharePath}
+                onChange={(e) => setSharePath(e.currentTarget.value)}
+                placeholder="backups/db"
+                description="Format: share[/subdir]. Port is rarely needed."
                 required
             />
-            <TextInput 
-                label="Username" 
-                value={login} 
+            <TextInput
+                label="Username"
+                value={login}
                 onChange={(e) => setLogin(e.currentTarget.value)}
                 placeholder="e.g., admin or DOMAIN\user"
                 required
             />
-            <TextInput 
-                label="Password" 
-                type="password" 
-                value={password} 
+            <TextInput
+                label="Password"
+                type="password"
+                value={password}
                 onChange={(e) => setPassword(e.currentTarget.value)}
                 placeholder={initialValues ? "Leave blank to keep existing" : ""}
                 required={!initialValues}
@@ -214,57 +246,74 @@ function DestinationSmbCredentials({ onCredentialsChange, initialValues }: Crede
 
 
 function DestinationSftpCredentials({ onCredentialsChange, initialValues }: CredentialComponentProps) {
-    const [path, setPath] = useState<string>("")
+    const [protocol, setProtocol] = useState<string>("sftp")
+    const [host, setHost] = useState<string>("localhost")
+    const [port, setPort] = useState<number | undefined>(22)
+    const [remotePath, setRemotePath] = useState<string>("")
     const [login, setLogin] = useState<string>("")
     const [password, setPassword] = useState<string>("")
 
     useEffect(() => {
         if (!initialValues) {
-            setPath("")
-            setLogin("")
-            setPassword("")
+            setProtocol("sftp"); setHost("localhost"); setPort(22)
+            setRemotePath(""); setLogin(""); setPassword("")
             return
         }
-
-        const url = initialValues.url
-        const pathMatch = url.match(/sftp:\/\/(.+)/)
-        if (pathMatch) setPath(pathMatch[1])
-        
+        const parsed = parseHostUrl(initialValues.url, ["sftp"], {
+            protocol: "sftp", host: "localhost", port: 22,
+        })
+        setProtocol(parsed.protocol); setHost(parsed.host); setPort(parsed.port)
+        // Extract the path after "sftp://host[:port]".
+        const pathPart = initialValues.url
+            ?.replace(/^sftp:\/\//, "")
+            .replace(/^[^/]+/, "")
+            .replace(/^\/+/, "") ?? ""
+        setRemotePath(pathPart)
         setLogin(initialValues.login || "")
         setPassword(initialValues.password || "")
     }, [initialValues])
 
     useEffect(() => {
+        const base = buildHostUrl(protocol, host, port)
         const credentials: Credentials = {
-            url: path ? `sftp://${path}` : "",
+            url: base && remotePath ? `${base}/${remotePath.replace(/^\/+/, "")}` : "",
             login: login || null,
             password: password || null,
-            api_key: null
+            api_key: null,
         }
         onCredentialsChange(credentials)
-    }, [path, login, password, onCredentialsChange])
+    }, [protocol, host, port, remotePath, login, password, onCredentialsChange])
 
     return (
         <Stack>
-            <TextInput 
-                label="SFTP Server Path" 
-                value={path} 
-                onChange={(e) => setPath(e.currentTarget.value)} 
-                placeholder="server.com:2222/var/backups"
-                description="Format: host[:port]/path. Port defaults to 22 if omitted."
+            <HostFields
+                protocols={SFTP_PROTOCOLS}
+                protocol={protocol}
+                host={host}
+                port={port}
+                onProtocolChange={setProtocol}
+                onHostChange={setHost}
+                onPortChange={setPort}
+                hostPlaceholder="server.com"
+            />
+            <TextInput
+                label="Remote Path"
+                value={remotePath}
+                onChange={(e) => setRemotePath(e.currentTarget.value)}
+                placeholder="var/backups"
                 required
             />
-            <TextInput 
-                label="Username" 
-                value={login} 
+            <TextInput
+                label="Username"
+                value={login}
                 onChange={(e) => setLogin(e.currentTarget.value)}
                 placeholder="e.g., root, ubuntu"
                 required
             />
-            <TextInput 
-                label="Password" 
-                type="password" 
-                value={password} 
+            <TextInput
+                label="Password"
+                type="password"
+                value={password}
                 onChange={(e) => setPassword(e.currentTarget.value)}
                 placeholder={initialValues ? "Leave blank to keep existing" : ""}
                 required={!initialValues}
