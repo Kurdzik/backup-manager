@@ -8,6 +8,7 @@ import {
   IconCalendarTime,
   IconUser,
   IconApps,
+  IconArrowsShuffle,
   IconChevronLeft,
   IconChevronRight,
 } from "@tabler/icons-react";
@@ -28,6 +29,7 @@ const mainItems: NavItem[] = [
   { icon: <IconApps size={16} stroke={1.5} />, label: "Connected Applications", route: "/ui/connected_apps" },
   { icon: <IconCloud size={16} stroke={1.5} />, label: "Backup Destinations", route: "/ui/backup_destinations" },
   { icon: <IconCalendarTime size={16} stroke={1.5} />, label: "Backup Schedules", route: "/ui/backup_schedules" },
+  { icon: <IconArrowsShuffle size={16} stroke={1.5} />, label: "Replication", route: "/ui/replication" },
   { icon: <IconDatabase size={16} stroke={1.5} />, label: "Manage Backups", route: "/ui/backups" },
 ];
 

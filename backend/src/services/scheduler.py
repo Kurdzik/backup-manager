@@ -1,7 +1,7 @@
 from celery.beat import Scheduler
 from celery.schedules import crontab
 from sqlmodel import select, Session
-from src.models import Schedule, TenantLogSettings
+from src.models import Replication, Schedule, TenantLogSettings
 from src.middleware import engine
 from kombu import Connection
 import threading
@@ -58,6 +58,34 @@ def load_schedules_from_db():
                     backup_source_id=schedule.source_id,
                     backup_destination_id=schedule.destination_id,
                     schedule_cron=schedule.schedule,
+                    persist_db=True,
+                )
+
+        replications = db_session.exec(select(Replication)).all()
+        for replication in replications:
+            if not replication.is_active:
+                continue
+
+            schedule_dict[
+                f"replication-{replication.id}-{replication.tenant_id}"
+            ] = {
+                "task": "src.services.worker.run_replication",
+                "schedule": parse_cron_exp(replication.schedule),
+                "kwargs": {
+                    "replication_id": replication.id,
+                    "tenant_id": replication.tenant_id,
+                    "triggered_by": "scheduled",
+                },
+            }
+            with tenant_context(
+                tenant_id=replication.tenant_id, service_name="scheduler"
+            ):
+                logger.info(
+                    "replication_schedule_loaded",
+                    replication_id=replication.id,
+                    source_id=replication.source_id,
+                    destination_id=replication.destination_id,
+                    schedule_cron=replication.schedule,
                     persist_db=True,
                 )
 

@@ -82,6 +82,31 @@ class Schedule(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.now)
 
 
+class Replication(SQLModel, table=True):
+    __tablename__ = "replications"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: str = Field(index=True)
+    name: str = Field(index=True)
+    source_id: int = Field(foreign_key="backup_sources.id")
+    destination_id: int = Field(foreign_key="backup_destinations.id")
+    keep_n: int
+    schedule: str  # Cron expression
+    is_active: bool = Field(default=True)
+    last_run: Optional[datetime] = None
+    next_run: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class ReplicationTarget(SQLModel, table=True):
+    __tablename__ = "replication_targets"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    replication_id: int = Field(foreign_key="replications.id", index=True)
+    target_source_id: int = Field(foreign_key="backup_sources.id")
+
+
 class Logs(SQLModel, table=True):
     __tablename__ = "logs"
 

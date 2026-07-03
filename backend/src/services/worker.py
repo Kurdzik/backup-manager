@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Optional
 
-from celery import Celery, current_task
+from celery import Celery, current_task, group
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 from sqlalchemy import create_engine, delete, func, text
 from sqlmodel import Session, and_, select
@@ -22,6 +22,8 @@ from src.base import Credentials
 from src.models import (
     Destination,
     Logs,
+    Replication,
+    ReplicationTarget,
     RestoreBackupRequest,
     Schedule,
     Source,
@@ -225,6 +227,138 @@ def _decrypt_credentials(
     )
 
 
+def _perform_backup(
+    backup_source_id: int,
+    backup_destination_id: int,
+    tenant_id: str,
+    schedule_id: Optional[int],
+    keep_n: Optional[int],
+    local_paths: list[str],
+) -> str:
+    """Core backup logic shared between create_backup and run_replication tasks.
+
+    Caller is responsible for tenant_context, log_context, tenant job slot,
+    error handling, and cleanup of local_paths.
+    """
+    _mark_schedule_last_run(schedule_id, tenant_id)
+    tenant_settings = _get_tenant_backup_settings(tenant_id)
+
+    _log_backup_stage("destination_lookup_started")
+    statement = select(Destination).where(
+        and_(
+            Destination.tenant_id == tenant_id,
+            Destination.id == backup_destination_id,
+        )
+    )
+    backup_destination = db_session.exec(statement).one()
+    _log_backup_stage(
+        "destination_lookup_completed",
+        destination_type=backup_destination.destination_type,
+        destination_name=backup_destination.name,
+    )
+
+    _log_backup_stage("source_lookup_started")
+    statement = select(Source).where(
+        and_(Source.tenant_id == tenant_id, Source.id == backup_source_id)
+    )
+    backup_source = db_session.exec(statement).one()
+    _log_backup_stage(
+        "source_lookup_completed",
+        source_type=backup_source.source_type,
+        source_name=backup_source.name,
+    )
+
+    _log_backup_stage("source_credentials_decryption_started")
+    source_credentials = _decrypt_credentials(
+        backup_source, "source", backup_source_id
+    )
+    _log_backup_stage("source_credentials_decryption_completed")
+
+    _log_backup_stage("source_manager_initialization_started")
+    backup_manager = BackupManager(
+        source_credentials, version=backup_source.version
+    ).create_from_type(backup_source.source_type)
+    _log_backup_stage("source_manager_initialization_completed")
+
+    _log_backup_stage("destination_credentials_decryption_started")
+    destination_credentials = _decrypt_credentials(
+        backup_destination, "destination", backup_destination_id
+    )
+    _log_backup_stage("destination_credentials_decryption_completed")
+
+    _log_backup_stage("destination_manager_initialization_started")
+    backup_destination_manager = BackupDestinationManager(
+        destination_credentials
+    ).create_from_type(backup_destination.destination_type)
+    _log_backup_stage("destination_manager_initialization_completed")
+
+    _log_backup_stage("local_backup_creation_started", source_type=backup_source.source_type)
+    local_path = backup_manager.create_backup(
+        tenant_id=tenant_id,
+        backup_source_id=backup_source_id,
+        schedule_id=schedule_id,
+    )
+    local_paths.append(local_path)
+    local_size = os.path.getsize(local_path) if os.path.exists(local_path) else None
+    _log_backup_stage(
+        "local_backup_creation_completed",
+        local_path=local_path,
+        local_size=local_size,
+    )
+
+    artifact_path = local_path
+    if tenant_settings.compression_enabled:
+        _log_backup_stage("compression_started", local_path=artifact_path)
+        artifact_path = compress_file(artifact_path)
+        local_paths.append(artifact_path)
+        _log_backup_stage("compression_completed", local_path=artifact_path)
+
+    if tenant_settings.encryption_enabled:
+        encryption_key = _get_tenant_encryption_key(tenant_id)
+        if not encryption_key:
+            raise ValueError("No encryption key configured. Generate an encryption key before enabling backup encryption.")
+        _log_backup_stage("encryption_started", key_fingerprint=encryption_key.key_fingerprint)
+        artifact_path = encrypt_file(artifact_path, encryption_key.public_key)
+        local_paths.append(artifact_path)
+        _log_backup_stage("encryption_completed", local_path=artifact_path)
+
+    _log_backup_stage("upload_started", local_path=artifact_path)
+    remote_path = backup_destination_manager.upload_backup(artifact_path)
+    _log_backup_stage("upload_completed", remote_path=remote_path)
+
+    _log_backup_stage("retention_listing_started")
+    backups = backup_destination_manager.list_backups()
+    _log_backup_stage("retention_listing_completed", backup_count=len(backups))
+
+    relevant_backups = sorted(
+        filter(
+            lambda backup: backup.source == backup_source.source_type,
+            backups,
+        ),
+        key=lambda x: x.modified,
+    )
+
+    if keep_n:
+        _log_backup_stage("retention_cleanup_started", keep_n=keep_n)
+        deleted_count = 0
+        for extra_backup in relevant_backups[:-keep_n]:
+            backup_destination_manager.delete_backup(extra_backup.path)
+            deleted_count += 1
+            _log_backup_stage(
+                "retention_backup_deleted",
+                backup_path=extra_backup.path,
+                deleted_count=deleted_count,
+            )
+
+        _log_backup_stage(
+            "retention_cleanup_completed", deleted_count=deleted_count, keep_n=keep_n
+        )
+    else:
+        _log_backup_stage("retention_cleanup_skipped", reason="keep_n_not_set")
+
+    return remote_path
+
+
 @app.task(bind=True, max_retries=BACKUP_MAX_RETRIES, soft_time_limit=BACKUP_TASK_TIMEOUT - 60, time_limit=BACKUP_TASK_TIMEOUT)
 def create_backup(
     self,
@@ -253,122 +387,14 @@ def create_backup(
                     _log_backup_stage("concurrency_limit_reached", limit=TENANT_JOB_CONCURRENCY)
                     raise self.retry(countdown=60)
 
-                _mark_schedule_last_run(schedule_id, tenant_id)
-                tenant_settings = _get_tenant_backup_settings(tenant_id)
-
-                _log_backup_stage("destination_lookup_started")
-                statement = select(Destination).where(
-                    and_(
-                        Destination.tenant_id == tenant_id,
-                        Destination.id == backup_destination_id,
-                    )
-                )
-                backup_destination = db_session.exec(statement).one()
-                _log_backup_stage(
-                    "destination_lookup_completed",
-                    destination_type=backup_destination.destination_type,
-                    destination_name=backup_destination.name,
-                )
-
-                _log_backup_stage("source_lookup_started")
-                statement = select(Source).where(
-                    and_(Source.tenant_id == tenant_id, Source.id == backup_source_id)
-                )
-                backup_source = db_session.exec(statement).one()
-                _log_backup_stage(
-                    "source_lookup_completed",
-                    source_type=backup_source.source_type,
-                    source_name=backup_source.name,
-                )
-
-                _log_backup_stage("source_credentials_decryption_started")
-                source_credentials = _decrypt_credentials(
-                    backup_source, "source", backup_source_id
-                )
-                _log_backup_stage("source_credentials_decryption_completed")
-
-                _log_backup_stage("source_manager_initialization_started")
-                backup_manager = BackupManager(
-                    source_credentials, version=backup_source.version
-                ).create_from_type(backup_source.source_type)
-                _log_backup_stage("source_manager_initialization_completed")
-
-                _log_backup_stage("destination_credentials_decryption_started")
-                destination_credentials = _decrypt_credentials(
-                    backup_destination, "destination", backup_destination_id
-                )
-                _log_backup_stage("destination_credentials_decryption_completed")
-
-                _log_backup_stage("destination_manager_initialization_started")
-                backup_destination_manager = BackupDestinationManager(
-                    destination_credentials
-                ).create_from_type(backup_destination.destination_type)
-                _log_backup_stage("destination_manager_initialization_completed")
-
-                _log_backup_stage("local_backup_creation_started", source_type=backup_source.source_type)
-                local_path = backup_manager.create_backup(
-                    tenant_id=tenant_id,
+                remote_path = _perform_backup(
                     backup_source_id=backup_source_id,
+                    backup_destination_id=backup_destination_id,
+                    tenant_id=tenant_id,
                     schedule_id=schedule_id,
+                    keep_n=keep_n,
+                    local_paths=local_paths,
                 )
-                local_paths.append(local_path)
-                local_size = os.path.getsize(local_path) if os.path.exists(local_path) else None
-                _log_backup_stage(
-                    "local_backup_creation_completed",
-                    local_path=local_path,
-                    local_size=local_size,
-                )
-
-                artifact_path = local_path
-                if tenant_settings.compression_enabled:
-                    _log_backup_stage("compression_started", local_path=artifact_path)
-                    artifact_path = compress_file(artifact_path)
-                    local_paths.append(artifact_path)
-                    _log_backup_stage("compression_completed", local_path=artifact_path)
-
-                if tenant_settings.encryption_enabled:
-                    encryption_key = _get_tenant_encryption_key(tenant_id)
-                    if not encryption_key:
-                        raise ValueError("No encryption key configured. Generate an encryption key before enabling backup encryption.")
-                    _log_backup_stage("encryption_started", key_fingerprint=encryption_key.key_fingerprint)
-                    artifact_path = encrypt_file(artifact_path, encryption_key.public_key)
-                    local_paths.append(artifact_path)
-                    _log_backup_stage("encryption_completed", local_path=artifact_path)
-
-                _log_backup_stage("upload_started", local_path=artifact_path)
-                remote_path = backup_destination_manager.upload_backup(artifact_path)
-                _log_backup_stage("upload_completed", remote_path=remote_path)
-
-                _log_backup_stage("retention_listing_started")
-                backups = backup_destination_manager.list_backups()
-                _log_backup_stage("retention_listing_completed", backup_count=len(backups))
-
-                relevant_backups = sorted(
-                    filter(
-                        lambda backup: backup.source == backup_source.source_type,
-                        backups,
-                    ),
-                    key=lambda x: x.modified,
-                )
-
-                if keep_n:
-                    _log_backup_stage("retention_cleanup_started", keep_n=keep_n)
-                    deleted_count = 0
-                    for extra_backup in relevant_backups[:-keep_n]:
-                        backup_destination_manager.delete_backup(extra_backup.path)
-                        deleted_count += 1
-                        _log_backup_stage(
-                            "retention_backup_deleted",
-                            backup_path=extra_backup.path,
-                            deleted_count=deleted_count,
-                        )
-
-                    _log_backup_stage(
-                        "retention_cleanup_completed", deleted_count=deleted_count, keep_n=keep_n
-                    )
-                else:
-                    _log_backup_stage("retention_cleanup_skipped", reason="keep_n_not_set")
-
                 _log_backup_stage("completed", remote_path=remote_path)
                 return remote_path
 
@@ -661,3 +687,163 @@ def restore_from_backup(self, request: RestoreBackupRequest, user_info: UserInfo
                 _log_restore_stage("local_cleanup_started")
                 _remove_local_paths(local_paths)
                 _log_restore_stage("local_cleanup_completed")
+
+
+def _log_replication_stage(stage: str, **kwargs) -> None:
+    logger.info("replication_stage", stage=stage, persist_db=True, **kwargs)
+
+
+def _mark_replication_last_run(replication_id: int, tenant_id: str) -> None:
+    replication = db_session.exec(
+        select(Replication).where(
+            and_(Replication.id == replication_id, Replication.tenant_id == tenant_id)
+        )
+    ).first()
+    if not replication:
+        _log_replication_stage(
+            "replication_last_run_update_skipped", reason="replication_not_found"
+        )
+        return
+    replication.last_run = datetime.now()
+    replication.updated_at = datetime.now()
+    db_session.add(replication)
+    db_session.commit()
+
+
+@app.task(bind=True, max_retries=BACKUP_MAX_RETRIES, soft_time_limit=BACKUP_TASK_TIMEOUT - 60, time_limit=BACKUP_TASK_TIMEOUT)
+def run_replication(
+    self,
+    replication_id: int,
+    tenant_id: str,
+    triggered_by: Optional[str] = None,
+):
+    trigger_type = triggered_by or "scheduled"
+    with tenant_context(tenant_id=tenant_id, service_name="worker"), log_context(
+        backup_operation="run_replication",
+        replication_id=replication_id,
+        trigger_type=trigger_type,
+        task_id=_current_task_id(),
+    ):
+        _log_replication_stage("started")
+        local_paths: list[str] = []
+
+        try:
+            with _tenant_job_slot(tenant_id) as slot_acquired:
+                if not slot_acquired:
+                    _log_replication_stage(
+                        "concurrency_limit_reached", limit=TENANT_JOB_CONCURRENCY
+                    )
+                    raise self.retry(countdown=60)
+
+                _log_replication_stage("replication_lookup_started")
+                replication = db_session.exec(
+                    select(Replication).where(
+                        and_(
+                            Replication.id == replication_id,
+                            Replication.tenant_id == tenant_id,
+                        )
+                    )
+                ).first()
+                if not replication:
+                    raise ValueError(f"Replication {replication_id} not found")
+                target_rows = db_session.exec(
+                    select(ReplicationTarget).where(
+                        ReplicationTarget.replication_id == replication_id
+                    )
+                ).all()
+                target_ids = [row.target_source_id for row in target_rows]
+                if not target_ids:
+                    raise ValueError(
+                        f"Replication {replication_id} has no configured targets"
+                    )
+                _log_replication_stage(
+                    "replication_lookup_completed",
+                    source_id=replication.source_id,
+                    destination_id=replication.destination_id,
+                    target_ids=target_ids,
+                )
+
+                # Replication does not support encrypted backups: the automated
+                # restore fan-out has no session-provided private key.
+                tenant_settings = _get_tenant_backup_settings(tenant_id)
+                if tenant_settings.encryption_enabled:
+                    raise ValueError(
+                        "Replication is not supported while backup encryption is "
+                        "enabled. Disable encryption in tenant settings first."
+                    )
+
+                _mark_replication_last_run(replication_id, tenant_id)
+
+                _log_replication_stage("backup_started")
+                remote_path = _perform_backup(
+                    backup_source_id=replication.source_id,
+                    backup_destination_id=replication.destination_id,
+                    tenant_id=tenant_id,
+                    schedule_id=None,
+                    keep_n=replication.keep_n,
+                    local_paths=local_paths,
+                )
+                _log_replication_stage("backup_completed", remote_path=remote_path)
+
+            # Fan-out restores after releasing the tenant slot so the individual
+            # restore tasks can acquire their own slots.
+            _log_replication_stage(
+                "restore_fanout_started",
+                target_count=len(target_ids),
+                remote_path=remote_path,
+            )
+            restore_group = group(
+                restore_from_backup.s(
+                    {
+                        "backup_source_id": target_id,
+                        "backup_destination_id": replication.destination_id,
+                        "backup_path": remote_path,
+                        "private_key": None,
+                    },
+                    {"user_id": 0, "tenant_id": tenant_id},
+                )
+                for target_id in target_ids
+            )
+            restore_group.apply_async()
+            _log_replication_stage(
+                "restore_fanout_dispatched",
+                target_count=len(target_ids),
+            )
+
+            _log_replication_stage("completed", remote_path=remote_path)
+            return remote_path
+
+        except SoftTimeLimitExceeded as e:
+            logger.error(
+                "replication_timeout", persist_db=True, exc_info=True
+            )
+            _notify_gotify(
+                tenant_id,
+                "Replication failed",
+                f"Replication {replication_id} exceeded task timeout.",
+            )
+            raise e
+        except Retry:
+            raise
+        except ValueError as e:
+            logger.error(
+                "replication_failed_validation_error",
+                error=str(e),
+                persist_db=True,
+                exc_info=True,
+            )
+            _notify_gotify(tenant_id, "Replication failed", str(e))
+            raise
+        except Exception as e:
+            logger.error(
+                "replication_failed", error=str(e), persist_db=True, exc_info=True
+            )
+            if self.request.retries < BACKUP_MAX_RETRIES:
+                _retry_backup_task(self, e)
+            _notify_gotify(tenant_id, "Replication failed", str(e))
+            raise
+        finally:
+            if local_paths:
+                _log_replication_stage("local_cleanup_started")
+                _remove_local_paths(local_paths)
+                _log_replication_stage("local_cleanup_completed")

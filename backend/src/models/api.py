@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Any, Optional, Literal
+from typing import Any, List, Optional, Literal
 from pydantic import Field
 from src.models import Credentials
 
@@ -106,3 +106,23 @@ class UpdateScheduleBackupRequest(BaseModel):
     backup_schedule: str
     is_active: bool
     keep_n: int
+
+
+class AddReplicationRequest(BaseModel):
+    name: str
+    source_id: int
+    target_source_ids: List[int] = Field(min_length=1)
+    destination_id: int
+    schedule: str
+    keep_n: int = Field(ge=1)
+
+
+class UpdateReplicationRequest(BaseModel):
+    replication_id: int
+    name: Optional[str] = None
+    source_id: Optional[int] = None
+    target_source_ids: Optional[List[int]] = None
+    destination_id: Optional[int] = None
+    schedule: Optional[str] = None
+    keep_n: Optional[int] = Field(default=None, ge=1)
+    is_active: Optional[bool] = None
